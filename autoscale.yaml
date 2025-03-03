@@ -1,0 +1,438 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Auto Scaling Lab - Dynamic Scaling of Apache Web Servers in us-east-1'
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: Week3KeyPair
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-VPC
+
+  # Public Subnet 1 (for ALB)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: us-east-1a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-PublicSubnet1
+
+  # Public Subnet 2 (for ALB)
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: us-east-1b
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-PublicSubnet2
+
+  # Private Subnet (for ASG)
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-PrivateSubnet
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-IGW
+
+  # Attach Internet Gateway to VPC
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-PublicRouteTable
+
+  # Public Route
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Associate Public Route Table with Public Subnets
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # EIP for NAT Gateway
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-NAT-EIP
+
+  # NAT Gateway
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-NAT
+
+  # Private Route Table
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-PrivateRouteTable
+
+  # Private Route
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # Associate Private Route Table with Private Subnet
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Security Groups
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP from ALB and SSH from anywhere
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !GetAtt ALBSecurityGroup.GroupId
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-InstanceSG
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic from the internet
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-ALBSG
+
+  # Application Load Balancer (ALB)
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: ASG-Lab-ALB
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-ALB
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ASG-Lab-TG
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: instance
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-TargetGroup
+
+  # IAM Role for EC2 instances to access CloudWatch
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Path: /
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref EC2Role
+
+  # Launch Template
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: ASG-Lab-LaunchTemplate
+      VersionDescription: Initial version
+      LaunchTemplateData:
+        ImageId: ami-0a3c3a20c09d6f377 # Amazon Linux 2 in us-west-2
+        InstanceType: t2.micro
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref InstanceSecurityGroup
+        IamInstanceProfile:
+          Name: !Ref EC2InstanceProfile
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            # Update packages
+            yum update -y
+            yum install -y httpd stress-ng
+            
+            # Start Apache and enable it on boot
+            systemctl start httpd
+            systemctl enable httpd
+            
+            # Create basic index page with instance info
+            echo "<html><head><title>Auto Scaling Lab</title></head><body>" > /var/www/html/index.html
+            echo "<h1>Hello from $(curl -s http://169.254.169.254/latest/meta-data/local-ipv4) / $(curl -s http://169.254.169.254/latest/meta-data/instance-id)</h1>" >> /var/www/html/index.html
+            echo "<p><button onclick=\"stressTest()\">Stress CPU</button></p>" >> /var/www/html/index.html
+            echo "<p id=\"status\"></p>" >> /var/www/html/index.html
+            
+            # Add JavaScript to trigger stress test
+            cat >> /var/www/html/index.html << 'EOF'
+            <script>
+            function stressTest() {
+              document.getElementById("status").innerHTML = "Stressing CPU for 60 seconds...";
+              fetch('/stress.cgi')
+                .then(response => response.text())
+                .then(data => {
+                  console.log(data);
+                })
+                .catch(error => {
+                  console.error('Error:', error);
+                });
+            }
+            </script>
+            </body></html>
+            EOF
+            
+            # Create CGI directory
+            mkdir -p /var/www/cgi-bin/
+            
+            # Create CGI script to trigger stress-ng
+            cat > /var/www/cgi-bin/stress.cgi << 'EOF'
+            #!/bin/bash
+            echo "Content-type: text/plain"
+            echo ""
+            echo "Stressing CPU..."
+            # Run stress-ng with 1 CPU worker for 60 seconds
+            nohup stress-ng --cpu 1 --timeout 60s > /dev/null 2>&1 &
+            EOF
+            
+            # Make CGI script executable
+            chmod +x /var/www/cgi-bin/stress.cgi
+            
+            # Configure Apache to execute CGI scripts
+            cat > /etc/httpd/conf.d/cgi.conf << 'EOF'
+            ScriptAlias /stress.cgi "/var/www/cgi-bin/stress.cgi"
+            <Directory "/var/www/cgi-bin">
+                AllowOverride None
+                Options +ExecCGI
+                AddHandler cgi-script .cgi
+                Require all granted
+            </Directory>
+            EOF
+            
+            # Install CloudWatch agent
+            yum install -y amazon-cloudwatch-agent
+            
+            # Create CloudWatch agent configuration file with proper instance ID
+            instanceId=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+            
+            cat > /opt/aws/amazon-cloudwatch-agent/bin/config.json << EOF
+            {
+              "metrics": {
+                "metrics_collected": {
+                  "cpu": {
+                    "measurement": [
+                      "cpu_usage_idle",
+                      "cpu_usage_iowait",
+                      "cpu_usage_user",
+                      "cpu_usage_system"
+                    ],
+                    "metrics_collection_interval": 10,
+                    "totalcpu": true
+                  },
+                  "mem": {
+                    "measurement": [
+                      "mem_used_percent"
+                    ],
+                    "metrics_collection_interval": 10
+                  }
+                },
+                "append_dimensions": {
+                  "InstanceId": "${instanceId}"
+                }
+              }
+            }
+            EOF
+            
+            # Start the CloudWatch agent
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/bin/config.json -s
+            
+            # Restart Apache to apply changes
+            systemctl restart httpd
+
+  # Auto Scaling Group (ASG)
+  ASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: ASG-Lab-AutoScalingGroup
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: "1"
+      MaxSize: "3"
+      DesiredCapacity: "1"
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: ASG-Lab-Instance
+          PropagateAtLaunch: true
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT5M
+        WaitOnResourceSignals: true
+
+  # Scale Out Policy (only scale-out as specified in requirements)
+  ScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref ASG
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: 1
+      Cooldown: "60"
+
+  # CloudWatch Alarm to trigger Scale Out
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ASG-Lab-HighCPUAlarm
+      AlarmDescription: Scale out if CPU > 50% for 2 consecutive periods of 60 seconds
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 50
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref ScaleOutPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref ASG
+
+Outputs:
+  LoadBalancerURL:
+    Description: URL of the deployed ALB
+    Value: !Join [ "", [ "http://", !GetAtt ALB.DNSName ] ]
+  
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+  
+  PublicSubnets:
+    Description: Public Subnets (comma separated)
+    Value: !Join [ ",", [ !Ref PublicSubnet1, !Ref PublicSubnet2 ] ]
+  
+  PrivateSubnet:
+    Description: Private Subnet
+    Value: !Ref PrivateSubnet
