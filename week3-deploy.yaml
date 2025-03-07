@@ -1,3 +1,4 @@
 template-file-path: autoscale.yaml
-parameters: {}
+parameters:
+  KeyName: week3
 tags: {}
