@@ -254,7 +254,7 @@ Resources:
       LaunchTemplateName: ASG-Lab-LaunchTemplate
       VersionDescription: Initial version
       LaunchTemplateData:
-        ImageId: ami-0a3c3a20c09d6f377 # Amazon Linux 2 in us-west-2
+        ImageId: ami-000089c8d02060104
         InstanceType: t2.micro
         KeyName: !Ref KeyName
         SecurityGroupIds:
@@ -266,23 +266,48 @@ Resources:
             #!/bin/bash
             # Update packages
             yum update -y
-            yum install -y httpd stress-ng
+            yum install -y httpd stress-ng bc
             
             # Start Apache and enable it on boot
             systemctl start httpd
             systemctl enable httpd
             
-            # Create basic index page with instance info
-            echo "<html><head><title>Auto Scaling Lab</title></head><body>" > /var/www/html/index.html
-            echo "<h1>Hello from $(curl -s http://169.254.169.254/latest/meta-data/local-ipv4) / $(curl -s http://169.254.169.254/latest/meta-data/instance-id)</h1>" >> /var/www/html/index.html
-            echo "<p><button onclick=\"stressTest()\">Stress CPU</button></p>" >> /var/www/html/index.html
-            echo "<p id=\"status\"></p>" >> /var/www/html/index.html
+            #Basic index page with instance info
+            echo "<html><head><title>Auto Scaling Lab</title>" > /var/www/html/index.html
+            echo "<style>body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }" >> /var/www/html/index.html
+            echo "button { background-color: #4CAF50; border: none; color: white; padding: 15px 32px; text-align: center; " >> /var/www/html/index.html
+            echo "text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 4px; }" >> /var/www/html/index.html
+            echo "button:hover { background-color: #45a049; }" >> /var/www/html/index.html
+            echo ".info { background-color: #f8f9fa; border-left: 6px solid #4CAF50; padding: 10px; margin-bottom: 15px; }" >> /var/www/html/index.html
+            echo "</style></head><body>" >> /var/www/html/index.html
             
-            # Add JavaScript to trigger stress test
+            # Get instance info
+            INSTANCE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+            INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+            
+            # Add content with instance info
+            echo "<h1>Auto Scaling Lab Demo</h1>" >> /var/www/html/index.html
+            echo "<div class='info'>" >> /var/www/html/index.html
+            echo "<h2>Hello from ${INSTANCE_IP} / ${INSTANCE_ID}</h2>" >> /var/www/html/index.html
+            echo "<p>This instance is running in a private subnet behind an Application Load Balancer.</p>" >> /var/www/html/index.html
+            echo "</div>" >> /var/www/html/index.html
+            
+            echo "<h3>CPU Stress Test</h3>" >> /var/www/html/index.html
+            echo "<p>Click the button below to stress the CPU of this instance. This will trigger the Auto Scaling Group to scale out if CPU utilization exceeds 50%.</p>" >> /var/www/html/index.html
+            echo "<button onclick=\"stressTest()\">Start High CPU Load Test</button>" >> /var/www/html/index.html
+            echo "<p id=\"status\"></p>" >> /var/www/html/index.html
+            echo "<p id=\"currentCPU\"></p>" >> /var/www/html/index.html
+            
+            # JavaScript to trigger stress test and show CPU usage
             cat >> /var/www/html/index.html << 'EOF'
             <script>
             function stressTest() {
-              document.getElementById("status").innerHTML = "Stressing CPU for 60 seconds...";
+              document.getElementById("status").innerHTML = "Running intensive CPU test (3 minutes)...";
+              document.getElementById("status").style.color = "#ff6600";
+            
+              // Start CPU monitoring
+              startCPUMonitoring();
+            
               fetch('/stress.cgi')
                 .then(response => response.text())
                 .then(data => {
@@ -292,6 +317,35 @@ Resources:
                   console.error('Error:', error);
                 });
             }
+            
+            function startCPUMonitoring() {
+              // Check CPU every 5 seconds
+              const intervalId = setInterval(() => {
+                fetch('/cpu.cgi')
+                  .then(response => response.text())
+                  .then(data => {
+                    document.getElementById("currentCPU").innerHTML = "Current CPU Usage: " + data + "% <progress value=\"" + data + "\" max=\"100\"></progress>";
+                    document.getElementById("currentCPU").style.fontWeight = "bold";
+            
+                    // If CPU usage > 50%, change color to red
+                    if (parseFloat(data) > 50) {
+                      document.getElementById("currentCPU").style.color = "#ff0000";
+                    } else {
+                      document.getElementById("currentCPU").style.color = "#000000";
+                    }
+                  })
+                  .catch(error => {
+                    console.error('Error:', error);
+                  });
+              }, 5000);
+            
+              // Stop monitoring after 4 minutes (longer than stress test)
+              setTimeout(() => {
+                clearInterval(intervalId);
+                document.getElementById("status").innerHTML = "CPU stress test completed.";
+                document.getElementById("status").style.color = "#4CAF50";
+              }, 240000);
+            }
             </script>
             </body></html>
             EOF
@@ -299,22 +353,41 @@ Resources:
             # Create CGI directory
             mkdir -p /var/www/cgi-bin/
             
-            # Create CGI script to trigger stress-ng
+            # Create CGI script to trigger stress-ng - UPDATED FOR FASTER CPU SPIKE
             cat > /var/www/cgi-bin/stress.cgi << 'EOF'
             #!/bin/bash
             echo "Content-type: text/plain"
             echo ""
             echo "Stressing CPU..."
-            # Run stress-ng with 1 CPU worker for 60 seconds
-            nohup stress-ng --cpu 1 --timeout 60s > /dev/null 2>&1 &
+            
+            # Run multiple CPU-intensive processes simultaneously with higher load
+            # This will get the CPU to spike above 50% much faster
+            nohup stress-ng --cpu $(nproc --all) --cpu-load 95 --cpu-method all --timeout 180s > /dev/null 2>&1 &
+            
+            # Run additional CPU-intensive processes in parallel
+            nohup openssl speed rsa2048 > /dev/null 2>&1 &
+            nohup dd if=/dev/zero bs=1M count=2048 | md5sum > /dev/null 2>&1 &
+            
+            # For t2.micro, run a quick artificial spike to ensure immediate metric reporting
+            nohup bash -c "for i in {1..8}; do yes > /dev/null & done; sleep 20; killall yes" > /dev/null 2>&1 &
             EOF
             
-            # Make CGI script executable
+            # Create CGI script to report current CPU usage
+            cat > /var/www/cgi-bin/cpu.cgi << 'EOF'
+            #!/bin/bash
+            echo "Content-type: text/plain"
+            echo ""
+            top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}'
+            EOF
+            
+            # Make CGI scripts executable
             chmod +x /var/www/cgi-bin/stress.cgi
+            chmod +x /var/www/cgi-bin/cpu.cgi
             
             # Configure Apache to execute CGI scripts
             cat > /etc/httpd/conf.d/cgi.conf << 'EOF'
             ScriptAlias /stress.cgi "/var/www/cgi-bin/stress.cgi"
+            ScriptAlias /cpu.cgi "/var/www/cgi-bin/cpu.cgi"
             <Directory "/var/www/cgi-bin">
                 AllowOverride None
                 Options +ExecCGI
@@ -323,10 +396,41 @@ Resources:
             </Directory>
             EOF
             
+            # Create a custom stress test script that uses multiple techniques
+            cat > /usr/local/bin/high-cpu-load.sh << 'EOF'
+            #!/bin/bash
+            # This script runs multiple CPU-intensive processes simultaneously
+            
+            # Run multiple CPU-bound tasks
+            for i in {1..4}; do
+              # Calculate prime numbers - very CPU intensive
+              (
+                while true; do
+                  for j in {1..9999}; do
+                    echo "$j" | factor > /dev/null
+                  done
+                done
+              ) &
+            done
+            
+            # Tell stress-ng to pin the CPU at a high level
+            stress-ng --cpu 2 --cpu-load 90 --timeout 180s &
+            
+            # Wait for the specified duration
+            sleep 180
+            
+            # Kill all the processes we started
+            killall bc
+            killall factor
+            EOF
+            
+            # Make the custom script executable
+            chmod +x /usr/local/bin/high-cpu-load.sh
+            
             # Install CloudWatch agent
             yum install -y amazon-cloudwatch-agent
             
-            # Create CloudWatch agent configuration file with proper instance ID
+            # Create CloudWatch agent configuration file with proper instance ID and MORE FREQUENT metrics
             instanceId=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
             
             cat > /opt/aws/amazon-cloudwatch-agent/bin/config.json << EOF
@@ -410,9 +514,9 @@ Resources:
       MetricName: CPUUtilization
       Namespace: AWS/EC2
       Statistic: Average
-      Period: 60
-      EvaluationPeriods: 2
-      Threshold: 50
+      Period: 30
+      EvaluationPeriods: 1
+      Threshold: 30
       ComparisonOperator: GreaterThanThreshold
       AlarmActions:
         - !Ref ScaleOutPolicy
