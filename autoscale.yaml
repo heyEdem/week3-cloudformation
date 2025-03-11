@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Auto Scaling Lab - Dynamic Scaling of Apache Web Servers in us-east-1'
+Description: 'Auto Scaling Lab - Dynamic Scaling of Apache Web Servers'
 
 Parameters:
   KeyName:
@@ -255,7 +255,7 @@ Resources:
       VersionDescription: Initial version
       LaunchTemplateData:
         ImageId: ami-08b5b3a93ed654d19
-        InstanceType: t2.microc
+        InstanceType: t2.micro
         KeyName: !Ref KeyName
         SecurityGroupIds:
           - !Ref InstanceSecurityGroup
@@ -359,7 +359,7 @@ Resources:
             echo "Content-type: text/plain"
             echo ""
             echo "Stressing CPU..."
-            
+
             # Run multiple CPU-intensive processes simultaneously with higher load
             # This will get the CPU to spike above 50% much faster
             nohup stress-ng --cpu $(nproc --all) --cpu-load 95 --cpu-method all --timeout 180s > /dev/null 2>&1 &
@@ -486,7 +486,7 @@ Resources:
       HealthCheckGracePeriod: 300
       Tags:
         - Key: Name
-          Value: ASG-Lab-Instance
+          Value: AutoScalingGroup-Lab-Instance
           PropagateAtLaunch: true
     UpdatePolicy:
       AutoScalingRollingUpdate:
@@ -495,7 +495,7 @@ Resources:
         PauseTime: PT5M
         WaitOnResourceSignals: true
 
-  # Scale Out Policy (only scale-out as specified in requirements)
+  # Scale Out Policy
   ScaleOutPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
@@ -503,20 +503,20 @@ Resources:
       PolicyType: SimpleScaling
       AdjustmentType: ChangeInCapacity
       ScalingAdjustment: 1
-      Cooldown: "60"
+      Cooldown: "30"
 
   # CloudWatch Alarm to trigger Scale Out
   CPUAlarmHigh:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: ASG-Lab-HighCPUAlarm
-      AlarmDescription: Scale out if CPU > 50% for 2 consecutive periods of 60 seconds
+      AlarmDescription: Scale out if CPU > 50% for 1 consecutive period of 30 seconds
       MetricName: CPUUtilization
       Namespace: AWS/EC2
       Statistic: Average
       Period: 30
       EvaluationPeriods: 1
-      Threshold: 30
+      Threshold: 50
       ComparisonOperator: GreaterThanThreshold
       AlarmActions:
         - !Ref ScaleOutPolicy
@@ -528,15 +528,15 @@ Outputs:
   LoadBalancerURL:
     Description: URL of the deployed ALB
     Value: !Join [ "", [ "http://", !GetAtt ALB.DNSName ] ]
-  
+
   VPCId:
     Description: VPC ID
     Value: !Ref VPC
-  
+
   PublicSubnets:
     Description: Public Subnets (comma separated)
     Value: !Join [ ",", [ !Ref PublicSubnet1, !Ref PublicSubnet2 ] ]
-  
+
   PrivateSubnet:
     Description: Private Subnet
     Value: !Ref PrivateSubnet
