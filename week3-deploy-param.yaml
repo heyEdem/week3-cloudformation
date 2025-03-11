@@ -1,4 +1,0 @@
-template-file-path: autoscale.yaml
-parameters:
-  KeyName: week3
-tags: {}
