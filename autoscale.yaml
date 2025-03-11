@@ -254,8 +254,8 @@ Resources:
       LaunchTemplateName: ASG-Lab-LaunchTemplate
       VersionDescription: Initial version
       LaunchTemplateData:
-        ImageId: ami-000089c8d02060104
-        InstanceType: t2.micro
+        ImageId: ami-08b5b3a93ed654d19
+        InstanceType: t2.microc
         KeyName: !Ref KeyName
         SecurityGroupIds:
           - !Ref InstanceSecurityGroup
